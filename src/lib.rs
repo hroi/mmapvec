@@ -1,13 +1,13 @@
 //! Author: Hroi Sigurdsson
 //!
 //! Low-level VM page backed container.
-//! Memory is allocated directly from mmap()/VirtualAlloc().
+//! Memory is allocated directly from ```mmap()```/```VirtualAlloc()```.
 //!
 //! # TODO
-//! - Implement for Windows (VirtualAlloc()).
-//! - IndexMut trait.
-//! - Index<Range<u32>> trait.
-//! - Iterator trait.
+//! - Implement for Windows (```VirtualAlloc()```).
+//! - ```IndexMut``` trait.
+//! - ```Index<Range<u32>>``` trait.
+//! - ```Iterator``` trait.
 
 #![no_std]
 
@@ -157,7 +157,7 @@ impl<T> MmapVec<T> {
         self.len == 0
     }
 
-    pub fn iter<'a>(&'a self) -> MmapVecIter<'a, T> {
+    pub fn iter(&self) -> MmapVecIter<T> {
         MmapVecIter {
             inner: self,
             pos: 0,
@@ -196,7 +196,8 @@ impl<T> MmapVec<T> {
             ptr::copy_nonoverlapping(self.ptr, new_ptr as *mut T, self.cap());
 
             if !self.ptr.is_null() {
-                if libc::munmap(self.ptr as *mut libc::c_void, self.bytes) != 0 {
+                let munmap_result = libc::munmap(self.ptr as *mut libc::c_void, self.bytes);
+                if munmap_result != 0 {
                     libc::perror(b"munmap\0".as_ptr() as *const libc::c_char);
                     panic!();
                 }
