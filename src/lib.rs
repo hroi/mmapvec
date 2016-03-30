@@ -7,7 +7,6 @@
 //! - Implement for Windows (```VirtualAlloc()```).
 //! - ```IndexMut``` trait.
 //! - ```Index<Range<u32>>``` trait.
-//! - ```Iterator``` trait.
 
 #![no_std]
 
@@ -59,16 +58,18 @@ impl<T> MmapVec<T> {
         ret
     }
 
+    /// Returns a reference to item at ```index``` without bounds checking.
     pub unsafe fn get_unchecked<'a>(&self, index: usize) -> &'a T {
         &*self.ptr.offset(index as isize)
     }
 
     /// Returns a reference to item at ```index```.
-    /// # Panics
-    /// - if index is out of bounds.
-    pub fn get<'a>(&self, index: usize) -> &'a T {
-        assert!(index < self.len);
-        unsafe { self.get_unchecked(index) }
+    pub fn get<'a>(&self, index: usize) -> Option<&'a T> {
+        if index < self.len {
+            unsafe { Some(self.get_unchecked(index)) }
+        } else {
+            None
+        }
     }
 
     /// Inserts item at ```index```. Items after index are moved to make place.
@@ -132,14 +133,12 @@ impl<T> MmapVec<T> {
 
     /// Pop item from end of container.
     /// This will *not* free any memory.
-    /// # Panics
-    /// - if container is empty
-    pub fn pop(&mut self) -> T {
-        assert!(!self.is_empty());
-
-        self.len -= 1;
-        unsafe {
-            ptr::read(self.ptr.offset((self.len) as isize))
+    pub fn pop(&mut self) -> Option<T> {
+        if self.is_empty() {
+            None
+        } else {
+            self.len -= 1;
+            unsafe { Some(ptr::read(self.ptr.offset((self.len) as isize))) }
         }
     }
 
@@ -210,30 +209,12 @@ impl<T> MmapVec<T> {
 
 }
 
-pub struct MmapVecIter<'a, T: 'a> {
-    inner: &'a MmapVec<T>,
-    pos: usize,
-}
-
-impl<'a, T: 'a> Iterator for MmapVecIter<'a, T> {
-    type Item = &'a T;
-
-    fn next(&mut self) -> Option<&'a T> {
-        if self.pos == self.inner.len {
-            return None;
-        }
-
-        let ret = unsafe {self.inner.get_unchecked(self.pos)};
-        self.pos += 1;
-        Some(ret)
-    }
-}
-
 impl<T> ops::Index<usize> for MmapVec<T> {
     type Output = T;
 
     fn index<'a>(&self, index: usize) -> &'a T {
-        self.get(index)
+        assert!(index < self.len);
+        unsafe {self.get_unchecked(index)}
     }
 }
 
@@ -258,6 +239,25 @@ impl<T> Drop for MmapVec<T> {
                 }
             }
         }
+    }
+}
+
+pub struct MmapVecIter<'a, T: 'a> {
+    inner: &'a MmapVec<T>,
+    pos: usize,
+}
+
+impl<'a, T: 'a> Iterator for MmapVecIter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<&'a T> {
+        if self.pos == self.inner.len {
+            return None;
+        }
+
+        let ret = unsafe {self.inner.get_unchecked(self.pos)};
+        self.pos += 1;
+        Some(ret)
     }
 }
 
@@ -293,7 +293,7 @@ mod tests {
         let mut v: MmapVec<u32> = MmapVec::new();
         v.push(123);
         assert_eq!(v.len, 1);
-        assert_eq!(v.pop(), 123);
+        assert_eq!(v.pop().unwrap(), 123);
         assert_eq!(v.len, 0);
     }
 
@@ -301,14 +301,14 @@ mod tests {
     #[should_panic]
     fn pop_empty() {
         let mut v: MmapVec<u32> = MmapVec::new();
-        v.pop();
+        v.pop().unwrap();
     }
 
     #[test]
     fn zero_sized() {
         let mut v: MmapVec<()> = MmapVec::new();
         v.push(());
-        assert_eq!(v.pop(), ());
+        assert_eq!(v.pop().unwrap(), ());
     }
 
     #[test]
@@ -317,9 +317,9 @@ mod tests {
         for i in 0..10 {
             v.push(i);
         }
-        assert_eq!(v.get(0), &0);
-        assert_eq!(v.get(1), &1);
-        assert_eq!(v.get(9), &9);
+        assert_eq!(v.get(0).unwrap(), &0);
+        assert_eq!(v.get(1).unwrap(), &1);
+        assert_eq!(v.get(9).unwrap(), &9);
     }
 
     #[test]
@@ -329,7 +329,7 @@ mod tests {
         for i in 0..10 {
             v.push(i);
         }
-        v.get(10);
+        v.get(10).unwrap();
     }
 
     #[test]
@@ -397,7 +397,7 @@ mod tests {
             v.push(i);
         }
         for i in 0..elems {
-            assert_eq!(v.pop(), elems - 1 - i);
+            assert_eq!(v.pop().unwrap(), elems - 1 - i);
         }
         assert_eq!(v.len, 0);
     }
@@ -421,23 +421,23 @@ mod tests {
         use ::MmapVec;
         use test::{Bencher, black_box};
 
+        const N_ITEMS: u32 = 1_000_000;
+
         #[bench]
-        fn push_10m(b: &mut Bencher) {
+        fn push(b: &mut Bencher) {
             b.iter(|| {
-                let n_items = 10_000_000;
                 let mut v: MmapVec<u32> = MmapVec::new();
-                for i in 0..n_items {
+                for i in 0..N_ITEMS {
                     v.push(i);
                 }
             });
         }
 
         #[bench]
-        fn push_10m_prealloc(b: &mut Bencher) {
+        fn push_prealloc(b: &mut Bencher) {
             b.iter(|| {
-                let n_items = 10_000_000u32;
-                let mut v: MmapVec<u32> = MmapVec::with_capacity(n_items as usize);
-                for i in 0..n_items {
+                let mut v: MmapVec<u32> = MmapVec::with_capacity(N_ITEMS as usize);
+                for i in 0..N_ITEMS {
                     v.push(i);
                 }
             });
@@ -445,23 +445,22 @@ mod tests {
 
         #[bench]
         fn pop(b: &mut Bencher) {
-            let n_items = 10_000_000u32;
-            let mut v: MmapVec<u32> = MmapVec::with_capacity(n_items as usize);
-            for i in 0..n_items {
+            let mut v: MmapVec<u32> = MmapVec::with_capacity(N_ITEMS as usize);
+            for i in 0..N_ITEMS {
                 v.push(i);
             }
-            assert!(!v.is_empty());
-            assert_eq!(v.len, n_items as usize);
             b.iter(|| {
-                black_box(v.pop());
+                v.len = N_ITEMS as usize; // reset
+                while let Some(x) = v.pop() {
+                    black_box(x);
+                }
             });
         }
 
         #[bench]
-        fn iter_10m(b: &mut Bencher) {
-            let n_items = 1_000_000u32;
-            let mut v: MmapVec<u32> = MmapVec::with_capacity(n_items as usize);
-            for i in 0..n_items {
+        fn iter(b: &mut Bencher) {
+            let mut v: MmapVec<u32> = MmapVec::with_capacity(N_ITEMS as usize);
+            for i in 0..N_ITEMS {
                 v.push(i);
             }
             b.iter(|| {
