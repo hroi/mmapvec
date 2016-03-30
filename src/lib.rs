@@ -1,10 +1,8 @@
 //! Author: Hroi Sigurdsson
 //!
 //! Low-level VM page backed container.
-//! Memory is allocated directly from ```mmap()```/```VirtualAlloc()```.
+//! Memory is allocated directly from ```mmap``` on Unix, or ```VirtualAlloc``` on Windows.
 //!
-//! # TODO
-//! - Implement for Windows (```VirtualAlloc()```).
 
 #![no_std]
 
