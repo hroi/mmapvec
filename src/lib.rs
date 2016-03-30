@@ -22,14 +22,14 @@ use core::slice;
 extern crate libc;
 
 #[cfg(windows)]
+extern crate winapi;
 extern crate kernel32;
 
 pub const EMPTY: *mut () = 0x1 as *mut (); // see alloc::heap::EMPTY
 
 pub struct MmapVec<T> {
     ptr: *mut T,
-    /// Number of contained items.
-    pub len: usize,
+    len: usize,
     bytes: usize,
 }
 
@@ -139,9 +139,50 @@ impl<T> MmapVec<T> {
         }
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix,windows)))]
     fn grow(&mut self, new_cap: usize) {
         notimplemented!()
+    }
+
+	  #[cfg(windows)]
+	  fn grow(&mut self, new_cap: usize) {
+		    if mem::size_of::<T>() == 0 {
+            return
+        }
+        let mut sysinfo: winapi::sysinfoapi::SYSTEM_INFO;
+        unsafe {
+	          sysinfo = mem::zeroed();
+            kernel32::GetSystemInfo(&mut sysinfo);
+        }
+        let page_size = sysinfo.dwPageSize as usize;
+        let min_bytes_to_alloc = new_cap * mem::size_of::<T>();
+        let pages_needed = match min_bytes_to_alloc % page_size as usize {
+            0 => min_bytes_to_alloc / page_size as usize,
+            _ => (min_bytes_to_alloc / page_size as usize) + 1,
+        };
+        let bytes_to_alloc = (pages_needed * page_size) as winapi::basetsd::SIZE_T;
+
+        unsafe {
+            let new_ptr = kernel32::VirtualAlloc(ptr::null_mut(), bytes_to_alloc,
+                                                 winapi::winnt::MEM_RESERVE | winapi::winnt::MEM_COMMIT,
+                                                 winapi::winnt::PAGE_READWRITE) as *mut T;
+            if new_ptr.is_null() {
+                panic!("VirtualAlloc");
+            }
+
+            ptr::copy_nonoverlapping(self.ptr, new_ptr as *mut T, self.cap());
+
+            if self.ptr != EMPTY as *mut T {
+				        if kernel32::VirtualFree(self.ptr as winapi::minwindef::LPVOID,
+                                         0, winapi::winnt::MEM_RELEASE) == 0 {
+					          panic!("VirtualFree");
+                }
+            }
+
+            self.ptr = new_ptr;
+            self.bytes = bytes_to_alloc as usize;
+        }
+
     }
 
     #[cfg(unix)]
@@ -201,9 +242,25 @@ impl<T> DerefMut for MmapVec<T> {
 
 impl<T> Drop for MmapVec<T> {
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix,windows)))]
     fn drop(&mut self) {
         unimplemented!()
+    }
+
+    #[cfg(windows)]
+    fn drop(&mut self) {
+        if self.ptr != EMPTY as *mut T {
+            while !self.is_empty() {
+                self.pop(); // and drop
+            }
+
+            unsafe {
+                if kernel32::VirtualFree(self.ptr as winapi::minwindef::LPVOID,
+                                         0, winapi::winnt::MEM_RELEASE) == 0 {
+					          panic!("VirtualFree");
+                }
+            }
+        }
     }
 
     #[cfg(unix)]
@@ -394,6 +451,15 @@ mod tests {
         assert_eq!(it.next(), Some(&1));
         assert_eq!(it.next(), Some(&2));
         assert!(it.next().is_none());
+    }
+
+    #[test]
+    fn slice() {
+        let mut v = MmapVec::<u32>::new();
+        for i in 0..3 {
+            v.push(i);
+        }
+        assert_eq!(&v[..], &[0,1,2]);
     }
 
     #[cfg(feature = "nightly")]
