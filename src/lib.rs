@@ -1,7 +1,8 @@
 //! Author: Hroi Sigurdsson
 //!
 //! Low-level VM page backed container.
-//! Memory is allocated directly from `mmap` on Unix, or `VirtualAlloc` on Windows.
+//! Memory is allocated directly from `mmap` on Unix,
+//! or `VirtualAlloc` on Windows.
 //!
 
 #![no_std]
@@ -142,14 +143,14 @@ impl<T> MmapVec<T> {
         unimplemented!()
     }
 
-	  #[cfg(windows)]
-	  fn grow(&mut self, new_cap: usize) {
-		    if mem::size_of::<T>() == 0 {
+    #[cfg(windows)]
+    fn grow(&mut self, new_cap: usize) {
+        if mem::size_of::<T>() == 0 {
             return
         }
-        let mut sysinfo: winapi::sysinfoapi::SYSTEM_INFO;
+        let mut sysinfo: winapi::SYSTEM_INFO;
         unsafe {
-	          sysinfo = mem::zeroed();
+            sysinfo = mem::zeroed();
             kernel32::GetSystemInfo(&mut sysinfo);
         }
         let page_size = sysinfo.dwPageSize as usize;
@@ -158,12 +159,12 @@ impl<T> MmapVec<T> {
             0 => min_bytes_to_alloc / page_size as usize,
             _ => (min_bytes_to_alloc / page_size as usize) + 1,
         };
-        let bytes_to_alloc = (pages_needed * page_size) as winapi::basetsd::SIZE_T;
+        let bytes_to_alloc = (pages_needed * page_size) as winapi::SIZE_T;
 
         unsafe {
             let new_ptr = kernel32::VirtualAlloc(ptr::null_mut(), bytes_to_alloc,
-                                                 winapi::winnt::MEM_RESERVE | winapi::winnt::MEM_COMMIT,
-                                                 winapi::winnt::PAGE_READWRITE) as *mut T;
+                                                 winapi::MEM_RESERVE | winapi::MEM_COMMIT,
+                                                 winapi::PAGE_READWRITE) as *mut T;
             if new_ptr.is_null() {
                 panic!("VirtualAlloc");
             }
@@ -171,9 +172,9 @@ impl<T> MmapVec<T> {
             ptr::copy_nonoverlapping(self.ptr, new_ptr as *mut T, self.cap());
 
             if self.ptr != EMPTY as *mut T {
-				        if kernel32::VirtualFree(self.ptr as winapi::minwindef::LPVOID,
-                                         0, winapi::winnt::MEM_RELEASE) == 0 {
-					          panic!("VirtualFree");
+                if kernel32::VirtualFree(self.ptr as winapi::LPVOID,
+                                         0, winapi::MEM_RELEASE) == 0 {
+                    panic!("VirtualFree");
                 }
             }
 
@@ -253,9 +254,9 @@ impl<T> Drop for MmapVec<T> {
             }
 
             unsafe {
-                if kernel32::VirtualFree(self.ptr as winapi::minwindef::LPVOID,
-                                         0, winapi::winnt::MEM_RELEASE) == 0 {
-					          panic!("VirtualFree");
+                if kernel32::VirtualFree(self.ptr as winapi::LPVOID,
+                                         0, winapi::MEM_RELEASE) == 0 {
+                    panic!("VirtualFree");
                 }
             }
         }
