@@ -141,7 +141,7 @@ impl<T> MmapVec<T> {
 
     #[cfg(not(any(unix,windows)))]
     fn grow(&mut self, new_cap: usize) {
-        notimplemented!()
+        unimplemented!()
     }
 
 	  #[cfg(windows)]
