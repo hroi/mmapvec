@@ -5,8 +5,6 @@
 //!
 //! # TODO
 //! - Implement for Windows (```VirtualAlloc()```).
-//! - ```IndexMut``` trait.
-//! - ```Index<Range<u32>>``` trait.
 
 #![no_std]
 
@@ -15,8 +13,9 @@
 extern crate test;
 
 use core::mem;
-use core::ops;
+use core::ops::{Deref, DerefMut};
 use core::ptr;
+use core::slice;
 
 
 #[cfg(unix)]
@@ -24,6 +23,8 @@ extern crate libc;
 
 #[cfg(windows)]
 extern crate kernel32;
+
+pub const EMPTY: *mut () = 0x1 as *mut (); // see alloc::heap::EMPTY
 
 pub struct MmapVec<T> {
     ptr: *mut T,
@@ -44,7 +45,7 @@ impl<T> MmapVec<T> {
     /// Returns an empty container. No allocation is performed.
     pub fn new() -> MmapVec<T> {
         MmapVec {
-            ptr: ptr::null_mut(),
+            ptr: EMPTY as *mut T,
             len: 0,
             bytes: 0,
         }
@@ -56,20 +57,6 @@ impl<T> MmapVec<T> {
         let mut ret = Self::new();
         ret.grow(cap);
         ret
-    }
-
-    /// Returns a reference to item at ```index``` without bounds checking.
-    pub unsafe fn get_unchecked<'a>(&self, index: usize) -> &'a T {
-        &*self.ptr.offset(index as isize)
-    }
-
-    /// Returns a reference to item at ```index```.
-    pub fn get<'a>(&self, index: usize) -> Option<&'a T> {
-        if index < self.len {
-            unsafe { Some(self.get_unchecked(index)) }
-        } else {
-            None
-        }
     }
 
     /// Inserts item at ```index```. Items after index are moved to make place.
@@ -152,17 +139,6 @@ impl<T> MmapVec<T> {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub fn iter(&self) -> MmapVecIter<T> {
-        MmapVecIter {
-            inner: self,
-            pos: 0,
-        }
-    }
-
     #[cfg(not(unix))]
     fn grow(&mut self, new_cap: usize) {
         notimplemented!()
@@ -194,7 +170,7 @@ impl<T> MmapVec<T> {
 
             ptr::copy_nonoverlapping(self.ptr, new_ptr as *mut T, self.cap());
 
-            if !self.ptr.is_null() {
+            if self.ptr != EMPTY as *mut T {
                 let munmap_result = libc::munmap(self.ptr as *mut libc::c_void, self.bytes);
                 if munmap_result != 0 {
                     libc::perror(b"munmap\0".as_ptr() as *const libc::c_char);
@@ -209,12 +185,17 @@ impl<T> MmapVec<T> {
 
 }
 
-impl<T> ops::Index<usize> for MmapVec<T> {
-    type Output = T;
+impl<T> Deref for MmapVec<T> {
+    type Target = [T];
 
-    fn index<'a>(&self, index: usize) -> &'a T {
-        assert!(index < self.len);
-        unsafe {self.get_unchecked(index)}
+    fn deref(&self) -> &[T] {
+        unsafe { slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+impl<T> DerefMut for MmapVec<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        unsafe { slice::from_raw_parts_mut(self.ptr, self.len) }
     }
 }
 
@@ -227,7 +208,7 @@ impl<T> Drop for MmapVec<T> {
 
     #[cfg(unix)]
     fn drop(&mut self) {
-        if !self.ptr.is_null() {
+        if self.ptr != EMPTY as *mut T {
             while !self.is_empty() {
                 self.pop(); // and drop
             }
@@ -242,25 +223,6 @@ impl<T> Drop for MmapVec<T> {
     }
 }
 
-pub struct MmapVecIter<'a, T: 'a> {
-    inner: &'a MmapVec<T>,
-    pos: usize,
-}
-
-impl<'a, T: 'a> Iterator for MmapVecIter<'a, T> {
-    type Item = &'a T;
-
-    fn next(&mut self) -> Option<&'a T> {
-        if self.pos == self.inner.len {
-            return None;
-        }
-
-        let ret = unsafe {self.inner.get_unchecked(self.pos)};
-        self.pos += 1;
-        Some(ret)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,7 +232,7 @@ mod tests {
         // an empty vector should not allocate anything
         let v: MmapVec<u32> = MmapVec::new();
         assert_eq!(v.cap(), 0);
-        assert!(v.ptr.is_null());
+        assert_eq!(v.ptr, EMPTY as *mut u32);
     }
 
     #[test]
@@ -309,6 +271,7 @@ mod tests {
         let mut v: MmapVec<()> = MmapVec::new();
         v.push(());
         assert_eq!(v.pop().unwrap(), ());
+        assert_eq!(v.ptr, EMPTY);
     }
 
     #[test]
@@ -387,6 +350,23 @@ mod tests {
             v.push(i);
         }
         v[10];
+    }
+
+    #[test]
+    fn index_mut() {
+        let mut v: MmapVec<u32> = MmapVec::new();
+        for _ in 0..10 {
+            v.push(0);
+        }
+        v[5] = 123;
+        assert_eq!(v[5], 123);
+    }
+
+    #[test]
+    #[should_panic]
+    fn index_mut_oob() {
+        let mut v: MmapVec<u32> = MmapVec::new();
+        v[5] = 123;
     }
 
     #[test]
@@ -471,4 +451,3 @@ mod tests {
         }
     }
 }
-
