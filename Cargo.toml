@@ -5,6 +5,7 @@ authors = ["Hroi Sigurdsson <hroi@asdf.dk>"]
 
 [dependencies]
 libc = "0.2"
+winapi = "0.2"
 kernel32-sys = "0.2"
 
 [features]
